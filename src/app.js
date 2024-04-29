@@ -133,7 +133,13 @@ function getRelativeFilepath(filepath) {
 function renderMd(inputMd) {
   const rawHtml = md.render(inputMd);
   return sanitizeHtml(rawHtml, {
-    allowedTags: sanitizeHtml.defaults.allowedTags.concat(["img", "input"]),
+    allowedTags: [
+      ...sanitizeHtml.defaults.allowedTags,
+      "img",
+      "input",
+      "details",
+      "summary",
+    ],
     allowedAttributes: {
       ...sanitizeHtml.defaults.allowedAttributes,
       img: ["src", "alt"],

@@ -50,28 +50,54 @@ app.get("/:path(*)", async (req, res) => {
     res.status(403).send(err.message);
     return;
   }
+  const filepathMd = `${filepath}.md`;
 
+  let stats;
+  let statsMd;
   try {
-    await stat(filepath);
+    stats = await stat(filepath);
   } catch (err) {
-    res.status(404).send("file not found");
+    if (err.code !== "ENOENT") throw err;
+  }
+  try {
+    statsMd = await stat(filepathMd);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+
+  if (stats) {
+    if (stats.isDirectory()) {
+      const files = await getFiles(filepath, "md");
+      const markdown = getFilesAsMd(files);
+      const html = renderMd(markdown);
+      res.render("md", {
+        content: html,
+        filepath: relative(baseDir, filepath),
+      });
+    } else if (filepath.endsWith(".md")) {
+      const markdown = await readFile(filepath, "utf8");
+      const html = renderMd(markdown);
+      res.render("md", {
+        content: html,
+        filepath: relative(baseDir, filepath),
+      });
+    } else {
+      res.sendFile(filepath);
+    }
     return;
   }
 
-  const stats = await stat(filepath);
-
-  if (stats.isDirectory()) {
-    const files = await getFiles(filepath, "md");
-    const markdown = getFilesAsMd(files);
+  if (statsMd) {
+    const markdown = await readFile(filepathMd, "utf8");
     const html = renderMd(markdown);
-    res.render("md", { content: html, filepath: relative(baseDir, filepath) });
-  } else if (filepath.endsWith(".md")) {
-    const markdown = await readFile(filepath, "utf8");
-    const html = renderMd(markdown);
-    res.render("md", { content: html, filepath: relative(baseDir, filepath) });
-  } else {
-    res.sendFile(filepath);
+    res.render("md", {
+      content: html,
+      filepath: relative(baseDir, filepathMd),
+    });
+    return;
   }
+
+  res.status(404).send("Not found");
 });
 
 io.on("connection", (socket) => {

@@ -10,7 +10,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node bin/appa.js start",
-    "dev": "nodemon bin/appa.js start"
+    "dev": "nodemon bin/appa.js start",
+    "publish": "npm publish --access public"
   },
   "author": "Hunter Gatewood",
   "license": "MIT",

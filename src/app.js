@@ -52,51 +52,9 @@ app.get("/:path(*)", async (req, res) => {
   }
   const filepathMd = `${filepath}.md`;
 
-  let stats;
-  let statsMd;
-  try {
-    stats = await stat(filepath);
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-  try {
-    statsMd = await stat(filepathMd);
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-
-  if (stats) {
-    if (stats.isDirectory()) {
-      const files = await getFiles(filepath, "md");
-      const markdown = getFilesAsMd(files);
-      const html = renderMd(markdown);
-      res.render("md", {
-        content: html,
-        filepath: relative(baseDir, filepath),
-      });
-    } else if (filepath.endsWith(".md")) {
-      const markdown = await readFile(filepath, "utf8");
-      const html = renderMd(markdown);
-      res.render("md", {
-        content: html,
-        filepath: relative(baseDir, filepath),
-      });
-    } else {
-      res.sendFile(filepath);
-    }
-    return;
-  }
-
-  if (statsMd) {
-    const markdown = await readFile(filepathMd, "utf8");
-    const html = renderMd(markdown);
-    res.render("md", {
-      content: html,
-      filepath: relative(baseDir, filepathMd),
-    });
-    return;
-  }
-
+  const [stats, statsMd] = await getStats(filepath, filepathMd);
+  if (await sendFilepath(res, stats, filepath)) return;
+  if (await sendFilepath(res, statsMd, filepathMd)) return;
   res.status(404).send("Not found");
 });
 
@@ -154,6 +112,49 @@ function getRelativeFilepath(filepath) {
     throw Error(`attempted directory traversal: ${filepath}`);
   }
   return resolved;
+}
+
+async function getStats(filepath, filepathMd) {
+  let stats;
+  let statsMd;
+  try {
+    stats = await stat(filepath);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+  try {
+    statsMd = await stat(filepathMd);
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+  }
+
+  return [stats, statsMd];
+}
+
+async function sendFilepath(res, stats, filepath) {
+  if (!stats) {
+    return false;
+  }
+
+  if (stats.isDirectory()) {
+    const files = await getFiles(filepath, "md");
+    const markdown = getFilesAsMd(files);
+    const html = renderMd(markdown);
+    res.render("md", {
+      content: html,
+      filepath: relative(baseDir, filepath),
+    });
+  } else if (filepath.endsWith(".md")) {
+    const markdown = await readFile(filepath, "utf8");
+    const html = renderMd(markdown);
+    res.render("md", {
+      content: html,
+      filepath: relative(baseDir, filepath),
+    });
+  } else {
+    res.sendFile(filepath);
+  }
+  return true;
 }
 
 function renderMd(inputMd) {

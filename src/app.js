@@ -42,6 +42,12 @@ let baseDir = process.cwd();
 app.set("views", join(__dirname, "views"));
 app.set("view engine", "ejs");
 
+app.use(express.static(join(__dirname, "public")));
+
+app.get("/favicon.ico", (req, res) => {
+  res.sendFile(join(__dirname, "public", "favicon.svg"));
+});
+
 app.get("/:path(*)", async (req, res) => {
   let filepath;
   try {

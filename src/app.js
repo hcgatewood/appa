@@ -48,10 +48,11 @@ app.get("/favicon.ico", (req, res) => {
   res.sendFile(join(__dirname, "public", "favicon.svg"));
 });
 
-app.get("/:path(*)", async (req, res) => {
+app.get("/{*path}", async (req, res) => {
+  const reqFilepath = req.params.path ? req.params.path.join("/") : ""; // params.path not set for root req
   let filepath;
   try {
-    filepath = getRelativeFilepath(req.params.path);
+    filepath = getRelativeFilepath(reqFilepath);
   } catch (err) {
     res.status(403).send(err.message);
     return;
@@ -146,14 +147,14 @@ async function sendFilepath(res, stats, filepath) {
     const files = await getFiles(filepath, "md");
     const markdown = getFilesAsMd(files);
     const html = renderMd(markdown);
-    res.render("md", {
+    await res.render("md", {
       content: html,
       filepath: relative(baseDir, filepath),
     });
   } else if (filepath.endsWith(".md")) {
     const markdown = await readFile(filepath, "utf8");
     const html = renderMd(markdown);
-    res.render("md", {
+    await res.render("md", {
       content: html,
       filepath: relative(baseDir, filepath),
     });
@@ -203,9 +204,16 @@ async function getFiles(dir, ext) {
 function getFilesAsMd(files) {
   const header = "# Markdown files";
   const body = files.map((file) => {
-    return `- [${file}](${file})`;
+    const relativeURI = escapeFilePath(file);
+    return `- [${file}](${relativeURI})`;
   });
   return [header, ...body].join("\n");
+}
+
+function escapeFilePath(filepath) {
+  return encodeURIComponent(filepath)
+    .replace(/%2F/g, "/") // preserve slashes
+    .replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`); // escape parentheses
 }
 
 function debug(...args) {

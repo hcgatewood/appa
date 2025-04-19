@@ -17,7 +17,7 @@ npm install --global @hcgatewood/appa
 ## Usage
 
 ```sh
-appa start --open [file]
+appa --open [file]
 ```
 
 ## History

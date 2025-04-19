@@ -11,14 +11,16 @@ const program = createCommand();
 program
   .option(
     "-p, --port <port>",
-    "Port to run the server on",
+    "port to run the server on",
     process.env.PORT || "3000",
   )
-  .option("-o, --open", "Open browser after starting the server");
+  .option("-o, --open", "open browser after starting the server");
 
 program
-  .command("start [filepath]")
-  .description("Start the server and optionally open a browser")
+  .command("start [filepath]", { isDefault: true })
+  .description(
+    "start the server and optionally open a browser (default command)",
+  )
   .action((filepath = "") => {
     const [dir, file] = getFilenames(filepath);
     run(program.opts().port, dir, async (err) => {

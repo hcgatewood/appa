@@ -1,6 +1,6 @@
 {
   "name": "@hcgatewood/appa",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "type": "module",
   "description": "Live Markdown previews",
   "main": "src/app.js",
@@ -19,7 +19,7 @@
     "chokidar": "^3.6.0",
     "commander": "^12.0.0",
     "ejs": "^3.1.10",
-    "express": "^4.19.2",
+    "express": "^5.1.0",
     "markdown-it": "^14.1.0",
     "markdown-it-anchor": "^8.6.7",
     "markdown-it-emoji": "^3.0.0",

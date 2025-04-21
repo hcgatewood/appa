@@ -1,12 +1,17 @@
 # Appa
 
-Appa provides live-reloaded Markdown previews in your browser.
+Live-reloaded Markdown previews in your browser.
+
+<p align="center"><img src="https://raw.githubusercontent.com/hcgatewood/appa/main/assets/logo_transparent.png" alt="Appa logo" width="250"/></p>
 
 ## Features
 
 - Real-time instant preview
-- Live reload
-- Near parity with GitHub Markdown rendering
+- GitHub-style Markdown rendering (emojis ✨😄🎉, permalink headings, checkboxes, etc.)
+- LaTeX support (KaTeX)
+- And more!
+
+<p align="center"> <img src="https://raw.githubusercontent.com/hcgatewood/appa/main/assets/demo.gif" alt="Appa demo" width="800"/></p>
 
 ## Install
 
@@ -17,9 +22,9 @@ npm install --global @hcgatewood/appa
 ## Usage
 
 ```sh
-appa --open [file]
+appa --open [FILE]
 ```
 
 ## History
 
-Appa is a simplified rewrite of [Livedown](https://github.com/shime/livedown), which is silently no longer maintained.
+Appa adds new features to [Livedown](https://github.com/shime/livedown), which is silently no longer maintained.

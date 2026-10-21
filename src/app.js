@@ -180,6 +180,12 @@ function renderMd(inputMd) {
       input: ["type", "checked", "disabled"],
       "*": ["align", "id", "class", "style", "width"],
     },
+    // sms: and imessage: links open a conversation in Messages
+    allowedSchemes: [
+      ...sanitizeHtml.defaults.allowedSchemes,
+      "sms",
+      "imessage",
+    ],
   });
 }
 

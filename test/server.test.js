@@ -3,7 +3,15 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -20,7 +28,9 @@ let port;
 let baseUrl;
 
 before(async () => {
-  fixturesDir = await mkdtemp(join(tmpdir(), "appa-test-"));
+  // Use the real path, as process.cwd() reports it. macOS's tmpdir sits behind a symlink (/var -> /private/var), and
+  // chokidar catches some changes through the symlink that it misses under the real path.
+  fixturesDir = await realpath(await mkdtemp(join(tmpdir(), "appa-test-")));
   await writeFile(
     join(fixturesDir, "notes.md"),
     "# Notes\n\n```mermaid\na --> b\n```\n",
@@ -29,6 +39,19 @@ before(async () => {
   await writeFile(join(fixturesDir, "..dots.md"), "# Dots\n");
   await mkdir(join(fixturesDir, "sub"));
   await writeFile(join(fixturesDir, "sub", "inner.md"), "# Inner\n");
+  await writeFile(
+    join(fixturesDir, "page.html"),
+    "<html><body><h1>Page</h1></body></html>\n",
+  );
+  await writeFile(join(fixturesDir, "fragment.html"), "<p>No body tag</p>\n");
+  // "İ" lowercases to two characters, so it shifts any index found in a lowercased copy of the page
+  await writeFile(
+    join(fixturesDir, "turkish.html"),
+    "<html><BODY><p>İstanbul</p></BODY></html>\n",
+  );
+  await writeFile(join(fixturesDir, "style.css"), "h1 {}\n");
+  await writeFile(join(fixturesDir, "app.js"), "// script\n");
+  await writeFile(join(fixturesDir, "notes.txt"), "not a page\n");
 
   neighborDir = `${fixturesDir}-old`;
   await mkdir(neighborDir);
@@ -63,6 +86,75 @@ test("links each file from the index, with its name escaped for URLs", async () 
   const html = await (await fetch(`${baseUrl}/`)).text();
   assert.ok(html.includes('href="notes.md"'));
   assert.ok(html.includes('href="my%20notes%20%28draft%29.md"'));
+});
+
+test("lists HTML pages in the index alongside Markdown", async () => {
+  const html = await (await fetch(`${baseUrl}/`)).text();
+  assert.ok(html.includes('href="page.html"'));
+  assert.ok(!html.includes('href="style.css"'));
+});
+
+test("adds live reload to an HTML page, before its </body>", async () => {
+  const res = await fetch(`${baseUrl}/page.html`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get("content-type"), /html/);
+
+  const html = await res.text();
+  const script = html.indexOf('<script src="/socket.io/socket.io.js">');
+  assert.ok(html.includes("<h1>Page</h1>"));
+  assert.ok(
+    script > html.indexOf("<h1>Page</h1>"),
+    "script isn't after the content",
+  );
+  assert.ok(
+    script < html.lastIndexOf("</body>"),
+    "script isn't before </body>",
+  );
+});
+
+test("adds live reload before </body> whatever its case or the text before it", async () => {
+  const html = await (await fetch(`${baseUrl}/turkish.html`)).text();
+  assert.ok(html.includes("<p>İstanbul</p>"));
+  assert.match(html, /<\/script>\n<\/BODY><\/html>\n$/);
+});
+
+test("adds live reload to an HTML page with no </body>", async () => {
+  const html = await (await fetch(`${baseUrl}/fragment.html`)).text();
+  assert.ok(html.startsWith("<p>No body tag</p>"));
+  assert.ok(html.includes('<script src="/socket.io/socket.io.js">'));
+});
+
+test("reloads an HTML page when it, or the CSS or JS beside it, changes", async () => {
+  for (const file of ["page.html", "style.css", "app.js"]) {
+    const replies = await socketReplies("watch", "page.html", {
+      change: () => appendFile(join(fixturesDir, file), "\n"),
+    });
+    assert.ok(
+      replies.some(([event]) => event === "file_updated"),
+      file,
+    );
+  }
+});
+
+test("doesn't reload an HTML page for other files beside it", async () => {
+  const replies = await socketReplies("watch", "page.html", {
+    change: () => appendFile(join(fixturesDir, "notes.txt"), "\n"),
+  });
+  assert.deepEqual(replies, []);
+});
+
+test("reloads a Markdown page when its file changes", async () => {
+  const replies = await socketReplies("watch", "notes.md", {
+    change: () => appendFile(join(fixturesDir, "notes.md"), "\n"),
+  });
+  assert.ok(replies.some(([event]) => event === "file_updated"));
+});
+
+test("reloads a Markdown page only for its own file", async () => {
+  const replies = await socketReplies("watch", "notes.md", {
+    change: () => appendFile(join(fixturesDir, "style.css"), "\n"),
+  });
+  assert.deepEqual(replies, []);
 });
 
 test("serves the directory index with or without a trailing slash", async () => {
@@ -183,12 +275,13 @@ async function waitForServer(url) {
   throw new Error(`appa didn't start at ${url}`);
 }
 
-// socketReplies emits one event over appa's live-reload socket and returns the events appa sends back within waitMs.
+// socketReplies emits one event over appa's live-reload socket and returns the events appa sends back.
 //
 // It speaks socket.io's wire protocol over a plain WebSocket, the way any client on the network could, rather than
-// through appa's page. It fails if the socket.io handshake doesn't complete, so an empty result means appa answered
-// nothing, not that the request never arrived.
-async function socketReplies(event, payload, waitMs = 1000) {
+// through appa's page. With change, it gives appa's file watcher time to start, runs change, then collects replies
+// for waitMs. It fails if the socket.io handshake doesn't complete, so an empty result means appa answered nothing,
+// not that the request never arrived.
+async function socketReplies(event, payload, { change, waitMs = 1000 } = {}) {
   const url = `ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`;
   const ws = new WebSocket(url);
   const replies = [];
@@ -204,7 +297,12 @@ async function socketReplies(event, payload, waitMs = 1000) {
       replies.push(JSON.parse(data.slice(2)));
     }
   };
-  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  if (change) {
+    await sleep(500);
+    await change();
+  }
+  await sleep(waitMs);
   ws.close();
 
   assert.ok(joined, "the socket.io handshake didn't complete");

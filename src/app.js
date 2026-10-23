@@ -143,10 +143,15 @@ io.on("connection", (socket) => {
       console.log(`attempted directory traversal: ${file}`);
       return;
     }
-    watcher = chokidar.watch(filepath, {
-      persistent: true,
-    });
+    watcher?.close();
+    // An HTML page also reloads when the CSS or JS beside it changes, so it watches its directory but no deeper. A
+    // Markdown page watches only its own file, with no depth option: on a single file, that option can make chokidar
+    // miss changes.
+    watcher = isHtml(filepath)
+      ? chokidar.watch(dirname(filepath), { persistent: true, depth: 0 })
+      : chokidar.watch(filepath, { persistent: true });
     watcher.on("change", (path) => {
+      if (!reloadsPage(filepath, path)) return;
       const changedFile = relative(baseDir, path);
       debug(`file updated: ${path} -> ${changedFile}`);
       socket.emit("file_updated", { filepath: changedFile });
@@ -231,20 +236,23 @@ async function sendFilepath(res, stats, filepath) {
   }
 
   if (stats.isDirectory()) {
-    const files = await getFiles(filepath, "md");
+    const files = await getPages(filepath);
     const markdown = getFilesAsMd(files);
     const html = renderMd(markdown);
     await res.render("md", {
       content: html,
       filepath: relative(baseDir, filepath),
     });
-  } else if (filepath.endsWith(".md")) {
+  } else if (isMd(filepath)) {
     const markdown = await readFile(filepath, "utf8");
     const html = renderMd(markdown);
     await res.render("md", {
       content: html,
       filepath: relative(baseDir, filepath),
     });
+  } else if (isHtml(filepath)) {
+    const html = await readFile(filepath, "utf8");
+    res.type("html").send(withLiveReload(html, relative(baseDir, filepath)));
   } else {
     res.sendFile(filepath);
   }
@@ -280,7 +288,8 @@ export function renderMd(inputMd) {
   });
 }
 
-async function getFiles(dir, ext) {
+// getPages lists the Markdown and HTML files under dir, recursively, as paths relative to it.
+async function getPages(dir) {
   let stack = [dir];
   let files = [];
   while (stack.length > 0) {
@@ -288,9 +297,10 @@ async function getFiles(dir, ext) {
     const items = await readdir(currentDir, { withFileTypes: true });
     for (const item of items) {
       const fullPath = join(currentDir, item.name);
+      const isPage = isMd(fullPath) || isHtml(fullPath);
       if (item.isDirectory()) {
         stack.push(fullPath);
-      } else if (item.isFile() && extname(fullPath) === `.${ext}`) {
+      } else if (item.isFile() && isPage) {
         files.push(relative(dir, fullPath));
       }
     }
@@ -299,12 +309,53 @@ async function getFiles(dir, ext) {
 }
 
 function getFilesAsMd(files) {
-  const header = "# Markdown files";
+  const header = "# Files";
   const body = files.map((file) => {
     const relativeURI = escapeFilePath(file);
     return `- [${file}](${relativeURI})`;
   });
   return [header, ...body].join("\n");
+}
+
+// isMd reports whether a path is a Markdown page, e.g. "notes.md".
+function isMd(filepath) {
+  return extname(filepath) === ".md";
+}
+
+// isHtml reports whether a path is an HTML page, e.g. "report.html" or "INDEX.HTM".
+function isHtml(filepath) {
+  return [".html", ".htm"].includes(extname(filepath).toLowerCase());
+}
+
+// reloadsPage reports whether a change to changedPath should reload the page at pagePath: always for the page's own
+// file, and for an HTML page, also for the CSS and JS beside it.
+function reloadsPage(pagePath, changedPath) {
+  if (changedPath === pagePath) return true;
+  const isAsset = [".css", ".js"].includes(extname(changedPath).toLowerCase());
+  return isHtml(pagePath) && isAsset;
+}
+
+// withLiveReload adds appa's live-reload client to an HTML page, before its </body>, or at the end if it has none.
+function withLiveReload(html, filepath) {
+  // Escaping "<" keeps a file name containing "</script>" from ending the script early
+  const path = JSON.stringify(filepath).replaceAll("<", "\\u003c");
+  // The function wrapper keeps the client's names from colliding with the page's own scripts
+  const client = `<script src="/socket.io/socket.io.js"></script>
+<script>
+  (() => {
+    const socket = io();
+    socket.emit("watch", ${path});
+    socket.on("file_updated", () => location.reload());
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) location.reload();
+    });
+  })();
+</script>
+`;
+  // Match </body> in the page itself: lowercasing a copy can change its length (e.g. "İ"), skewing the index
+  const bodyEnd = [...html.matchAll(/<\/body>/gi)].at(-1)?.index ?? -1;
+  if (bodyEnd === -1) return html + client;
+  return html.slice(0, bodyEnd) + client + html.slice(bodyEnd);
 }
 
 function escapeFilePath(filepath) {

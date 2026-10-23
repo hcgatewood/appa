@@ -7,10 +7,15 @@
   "bin": {
     "appa": "bin/appa.js"
   },
+  "files": [
+    "bin",
+    "src"
+  ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node bin/appa.js start",
-    "dev": "nodemon bin/appa.js start"
+    "dev": "nodemon bin/appa.js start",
+    "prepare": "mkdir -p src/vendor/mermaid && cp node_modules/mermaid/dist/mermaid.min.js src/vendor/mermaid/"
   },
   "author": "Hunter Gatewood",
   "license": "MIT",
@@ -20,6 +25,7 @@
     "commander": "^12.0.0",
     "ejs": "^3.1.10",
     "express": "^5.1.0",
+    "github-markdown-css": "^5.9.0",
     "markdown-it": "^14.1.0",
     "markdown-it-anchor": "^8.6.7",
     "markdown-it-emoji": "^3.0.0",
@@ -30,6 +36,7 @@
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
+    "mermaid": "^12.1.0",
     "nodemon": "^3.1.0"
   }
 }

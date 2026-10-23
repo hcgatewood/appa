@@ -8,6 +8,7 @@ import markdownItTaskCheckbox from "markdown-it-task-checkbox";
 import sanitizeHtml from "sanitize-html";
 import { Server } from "socket.io";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import {
   dirname,
   extname,
@@ -22,6 +23,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 
 const DEBUG = false;
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
 const app = express();
 const server = createServer(app);
@@ -61,6 +63,30 @@ app.set("views", join(__dirname, "views"));
 app.set("view engine", "ejs");
 
 app.use(express.static(join(__dirname, "public")));
+
+// Pages load their CSS, fonts, and scripts from appa's own packages rather than a CDN, so they work offline and
+// each stylesheet matches the library version that rendered the page. These routes take precedence over files in
+// the served directory, so they live under /_appa/, a name a docs folder won't use.
+//
+// Mermaid's npm package is 200 MB, almost all of it unused here, so it's only a dev dependency: the prepare script
+// copies its one browser file into src/vendor, and package.json's files list ships that copy.
+app.use(
+  "/_appa/github-markdown-css",
+  express.static(assetDir("github-markdown-css/github-markdown-light.css")),
+);
+app.use(
+  "/_appa/highlight.js",
+  express.static(
+    assetDir("highlight.js/styles/default.min.css", "markdown-it-highlightjs"),
+  ),
+);
+app.use(
+  "/_appa/katex",
+  express.static(
+    assetDir("katex/dist/katex.min.css", "@iktakahiro/markdown-it-katex"),
+  ),
+);
+app.use("/_appa/mermaid", express.static(join(__dirname, "vendor", "mermaid")));
 
 app.get("/favicon.ico", (req, res) => {
   res.sendFile(join(__dirname, "public", "favicon.svg"));
@@ -242,6 +268,17 @@ function escapeFilePath(filepath) {
   return encodeURIComponent(filepath)
     .replace(/%2F/g, "/") // preserve slashes
     .replace(/[()]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`); // escape parentheses
+}
+
+// assetDir returns the directory holding a package file, e.g. "katex/dist/katex.min.css" -> ".../katex/dist".
+//
+// With fromPackage, it resolves the file the way that package does, so it finds the exact copy the package uses
+// even when npm installs another version elsewhere in node_modules.
+function assetDir(file, fromPackage) {
+  const resolve = fromPackage
+    ? createRequire(require.resolve(fromPackage)).resolve
+    : require.resolve;
+  return dirname(resolve(file));
 }
 
 function debug(...args) {

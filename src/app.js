@@ -208,7 +208,7 @@ async function sendFilepath(res, stats, filepath) {
   return true;
 }
 
-function renderMd(inputMd) {
+export function renderMd(inputMd) {
   const rawHtml = md.render(inputMd);
   return sanitizeHtml(rawHtml, {
     allowedTags: [

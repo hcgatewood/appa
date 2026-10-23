@@ -12,7 +12,7 @@
     "src"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test",
     "start": "node bin/appa.js start",
     "dev": "nodemon bin/appa.js start",
     "prepare": "mkdir -p src/vendor/mermaid && cp node_modules/mermaid/dist/mermaid.min.js src/vendor/mermaid/"

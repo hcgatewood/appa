@@ -1,0 +1,4 @@
+# REF: https://mise.jdx.dev/configuration.html
+
+[tools]
+node = "24.22.0"

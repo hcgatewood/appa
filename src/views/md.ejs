@@ -23,6 +23,11 @@
                 padding: 15px;
             }
         }
+
+        .markdown-body pre.mermaid[data-processed] {
+            background: none;
+            text-align: center;
+        }
     </style>
     <script>
       let filepath = "<%= filepath %>";
@@ -42,6 +47,39 @@
       window.addEventListener("pageshow", function(event) {
         if (event.persisted) document.location.reload();
       });
+    </script>
+    <script>
+      // Mermaid is 5.5 MB, so only pages with a diagram load it
+      document.addEventListener("DOMContentLoaded", function () {
+        if (!document.querySelector("pre.mermaid")) return;
+
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/mermaid@12.1.0/dist/mermaid.min.js";
+        script.integrity = "sha384-EbBpjO7rlR6eqZEcG7GaPpyk9H9WrMyPWX4d3KvPYltgt8Z8l0z6R56B1qP40pR4";
+        script.crossOrigin = "anonymous";
+        script.onload = function () {
+          // strict strips HTML from labels and turns off click handlers
+          mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+          drawMermaid(document);
+
+          // A diagram drawn while hidden comes out zero-sized, so one in a closed <details> waits until it opens.
+          // toggle doesn't bubble, so listen in the capture phase.
+          document.addEventListener("toggle", function (event) {
+            if (event.target.open) drawMermaid(event.target);
+          }, true);
+        };
+        document.head.appendChild(script);
+      });
+
+      // drawMermaid draws the diagrams under root (the page, or a <details> that just opened), skipping:
+      //   - Ones already drawn, which Mermaid marks with data-processed
+      //   - Ones inside a closed <details>, which the toggle listener draws when it opens
+      function drawMermaid(root) {
+        const undrawn = [...root.querySelectorAll("pre.mermaid:not([data-processed])")];
+        const visible = undrawn.filter((pre) => !pre.closest("details:not([open])"));
+        // suppressErrors draws a bad diagram as an error message instead of stopping the rest
+        if (visible.length > 0) mermaid.run({ nodes: visible, suppressErrors: true });
+      }
     </script>
 </head>
 

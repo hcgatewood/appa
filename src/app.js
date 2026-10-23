@@ -37,6 +37,24 @@ const md = markdownIt({
   .use(markdownItKatex)
   .use(markdownItEmoji);
 
+// Turn ```mermaid code blocks into <pre class="mermaid">, the element the script in md.ejs draws as a diagram.
+//
+// markdown-it builds each code block's HTML with the function in md.renderer.rules.fence. This replaces it with
+// one that handles mermaid blocks itself and passes every other block to the original, which adds syntax
+// highlighting. Mermaid source never reaches highlight.js, so it doesn't log "Could not find the language".
+//
+// e.g. a block holding `a --> b` becomes <pre class="mermaid">a --&gt; b</pre>, and the browser turns `&gt;`
+// back into `>` before Mermaid reads it. Until Mermaid draws it, or if it can't load, the block shows that source.
+const renderFence = md.renderer.rules.fence;
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const lang = token.info.trim().split(/\s+/)[0]; // e.g. "mermaid" from ```mermaid
+  if (lang !== "mermaid") {
+    return renderFence(tokens, idx, options, env, self);
+  }
+  return `<pre class="mermaid">${md.utils.escapeHtml(token.content)}</pre>\n`;
+};
+
 let baseDir = process.cwd();
 
 app.set("views", join(__dirname, "views"));

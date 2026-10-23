@@ -3,17 +3,18 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repoDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 let fixturesDir;
+let neighborDir; // beside fixturesDir, with a name that starts the same way, e.g. appa-test-x1y2 and appa-test-x1y2-old
 let appa;
 let port;
 let baseUrl;
@@ -25,6 +26,13 @@ before(async () => {
     "# Notes\n\n```mermaid\na --> b\n```\n",
   );
   await writeFile(join(fixturesDir, "my notes (draft).md"), "# Draft\n");
+  await writeFile(join(fixturesDir, "..dots.md"), "# Dots\n");
+  await mkdir(join(fixturesDir, "sub"));
+  await writeFile(join(fixturesDir, "sub", "inner.md"), "# Inner\n");
+
+  neighborDir = `${fixturesDir}-old`;
+  await mkdir(neighborDir);
+  await writeFile(join(neighborDir, "secret.md"), "NEIGHBOR-SECRET\n");
 
   port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
@@ -40,6 +48,7 @@ before(async () => {
 after(async () => {
   appa.kill();
   await rm(fixturesDir, { recursive: true, force: true });
+  await rm(neighborDir, { recursive: true, force: true });
 });
 
 test("serves a Markdown file at its path, with or without .md", async () => {
@@ -56,9 +65,36 @@ test("links each file from the index, with its name escaped for URLs", async () 
   assert.ok(html.includes('href="my%20notes%20%28draft%29.md"'));
 });
 
+test("serves the directory index with or without a trailing slash", async () => {
+  for (const path of ["/", "/sub", "/sub/"]) {
+    const res = await fetch(baseUrl + path);
+    assert.equal(res.status, 200, path);
+    if (path !== "/") assert.match(await res.text(), /inner\.md/, path);
+  }
+});
+
 test("refuses paths that climb out of the served directory", async () => {
   assert.equal(await rawStatus("/../secret.md"), 403);
+  assert.equal(await rawStatus(`/../${basename(neighborDir)}/secret.md`), 403);
+  assert.equal(await rawStatus(`/${neighborDir}/secret.md`), 403); // absolute
   assert.notEqual(await rawStatus("/_appa/katex/../../../package.json"), 200);
+});
+
+test("serves a path that climbs out and back into the served directory", async () => {
+  assert.equal(await rawStatus(`/../${basename(fixturesDir)}/notes.md`), 200);
+});
+
+test("serves a file whose name starts with two dots", async () => {
+  const res = await fetch(`${baseUrl}/..dots.md`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /<h1[^>]*>Dots<\/h1>/);
+});
+
+test("doesn't read files over the live-reload socket", async () => {
+  const replies = await socketReplies("get_md", {
+    filepath: `../${basename(neighborDir)}/secret.md`,
+  });
+  assert.doesNotMatch(JSON.stringify(replies), /NEIGHBOR-SECRET/);
 });
 
 test("loads every stylesheet and script from appa itself", async () => {
@@ -120,6 +156,34 @@ async function waitForServer(url) {
     }
   }
   throw new Error(`appa didn't start at ${url}`);
+}
+
+// socketReplies emits one event over appa's live-reload socket and returns the events appa sends back within waitMs.
+//
+// It speaks socket.io's wire protocol over a plain WebSocket, the way any client on the network could, rather than
+// through appa's page. It fails if the socket.io handshake doesn't complete, so an empty result means appa answered
+// nothing, not that the request never arrived.
+async function socketReplies(event, payload, waitMs = 1000) {
+  const url = `ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`;
+  const ws = new WebSocket(url);
+  const replies = [];
+  let joined = false;
+
+  ws.onmessage = ({ data }) => {
+    if (data.startsWith("0")) {
+      ws.send("40"); // the server opened the connection; join the default namespace
+    } else if (data.startsWith("40")) {
+      joined = true;
+      ws.send(`42${JSON.stringify([event, payload])}`); // 42 = an event message
+    } else if (data.startsWith("42")) {
+      replies.push(JSON.parse(data.slice(2)));
+    }
+  };
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  ws.close();
+
+  assert.ok(joined, "the socket.io handshake didn't complete");
+  return replies;
 }
 
 // rawStatus returns the status code for path, sent exactly as written. fetch would resolve the ".." segments

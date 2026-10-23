@@ -12,10 +12,11 @@ import { createRequire } from "node:module";
 import {
   dirname,
   extname,
+  isAbsolute,
   join,
   relative,
   resolve,
-  normalize,
+  sep,
 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { full as markdownItEmoji } from "markdown-it-emoji";
@@ -139,27 +140,31 @@ io.on("connection", (socket) => {
       socket.emit("file_updated", { filepath: changedFile });
     });
   });
-
-  socket.on("get_md", async (message) => {
-    debug(`${socket.id} requested markdown file`);
-    try {
-      const filepath = join(baseDir, message.filepath);
-      const content = await readFile(filepath, "utf8");
-      const rendered = renderMd(content);
-      socket.emit("set_md", { data: rendered });
-    } catch (err) {
-      socket.emit("set_md", { data: err.message });
-    }
-  });
 });
 
+// getRelativeFilepath resolves a requested path against the served directory, refusing any path outside it.
+//
+// The path comes from a request's URL or a live-reload watch message, so the sender can aim it at any file the user
+// can read, e.g. an SSH key. With appa serving ~/docs:
+//   notes.md              -> ~/docs/notes.md
+//   sub/../notes.md       -> ~/docs/notes.md
+//   ../docs/notes.md      -> ~/docs/notes.md
+//   ..dots.md             -> ~/docs/..dots.md
+//   ../docs-old/notes.md  -> refused
+//   ../.ssh/id_ed25519    -> refused
+//   /etc/passwd           -> refused
 function getRelativeFilepath(filepath) {
-  const norm = normalize(filepath);
-  if (norm.startsWith("..") || norm.startsWith("/")) {
-    throw Error(`attempted directory traversal: ${filepath}`);
-  }
-  const resolved = resolve(baseDir, norm);
-  if (!resolved.startsWith(baseDir)) {
+  const resolved = resolve(baseDir, filepath);
+
+  // Compare whole path segments: a plain prefix check would let /docs match a neighbor like /docs-old, and a file
+  // named ..dots.md starts with ".." without leaving the directory. relative() returns an absolute path only for
+  // another drive, on Windows.
+  const fromBase = relative(baseDir, resolved); // e.g. "sub/notes.md", or "../docs-old/notes.md"
+  const isOutside =
+    fromBase === ".." ||
+    fromBase.startsWith(`..${sep}`) ||
+    isAbsolute(fromBase);
+  if (isOutside) {
     throw Error(`attempted directory traversal: ${filepath}`);
   }
   return resolved;

@@ -186,6 +186,10 @@ function renderMd(inputMd) {
       "sms",
       "imessage",
     ],
+    // data: lets a doc embed its own images. Only <img> allows it, since an image can't run script but a data: page can.
+    allowedSchemesByTag: {
+      img: [...sanitizeHtml.defaults.allowedSchemes, "data"],
+    },
   });
 }
 

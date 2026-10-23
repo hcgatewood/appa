@@ -28,7 +28,10 @@ const require = createRequire(import.meta.url);
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server);
+// Browsers let any website open a WebSocket to localhost, so live-reload connections need their own Origin check
+const io = new Server(server, {
+  allowRequest: (req, callback) => callback(null, isLocalRequest(req)),
+});
 
 const md = markdownIt({
   html: true,
@@ -62,6 +65,15 @@ let baseDir = process.cwd();
 
 app.set("views", join(__dirname, "views"));
 app.set("view engine", "ejs");
+
+// Runs before every route, so nothing below answers a request from another site or a rebound domain
+app.use((req, res, next) => {
+  if (!isLocalRequest(req)) {
+    res.status(403).send("Forbidden");
+    return;
+  }
+  next();
+});
 
 app.use(express.static(join(__dirname, "public")));
 
@@ -168,6 +180,32 @@ function getRelativeFilepath(filepath) {
     throw Error(`attempted directory traversal: ${filepath}`);
   }
   return resolved;
+}
+
+// isLocalRequest reports whether a request is addressed to this machine and, if a web page sent it, whether that
+// page came from this machine too.
+//
+// The Host check blocks DNS rebinding, where a remote page re-points its own domain at 127.0.0.1 to reach local
+// servers: the browser still sends that domain as the Host. Requests with no Origin come from programs or
+// top-level navigation rather than from scripts on another site, and the loopback-only listener already limits
+// programs to this machine.
+function isLocalRequest(req) {
+  const { host, origin } = req.headers;
+  return isLoopbackHost(host) && (!origin || isLoopbackOrigin(origin));
+}
+
+// isLoopbackHost reports whether a Host header names this machine, e.g. "localhost:8082" or "[::1]:8082".
+function isLoopbackHost(host = "") {
+  const name = host.replace(/:\d+$/, ""); // drop the port
+  return ["localhost", "127.0.0.1", "[::1]"].includes(name);
+}
+
+function isLoopbackOrigin(origin) {
+  try {
+    return isLoopbackHost(new URL(origin).host);
+  } catch {
+    return false; // e.g. "null", which sandboxed frames and file:// pages send
+  }
 }
 
 async function getStats(filepath, filepathMd) {
@@ -294,7 +332,8 @@ function debug(...args) {
 
 export default async function run(port, filepath, cb) {
   baseDir = filepath;
-  server.listen(port, () => {
+  // Loopback only: appa serves private files with no login, so it must not answer the network
+  server.listen(port, "127.0.0.1", () => {
     if (cb) cb();
   });
 }

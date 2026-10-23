@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,31 @@ test("doesn't read files over the live-reload socket", async () => {
     filepath: `../${basename(neighborDir)}/secret.md`,
   });
   assert.doesNotMatch(JSON.stringify(replies), /NEIGHBOR-SECRET/);
+});
+
+test("doesn't answer on the machine's network address", async (t) => {
+  const lanAddress = Object.values(networkInterfaces())
+    .flat()
+    .find((iface) => iface.family === "IPv4" && !iface.internal)?.address;
+  if (!lanAddress) {
+    t.skip("no network address to try");
+    return;
+  }
+  await assert.rejects(fetch(`http://${lanAddress}:${port}/`));
+});
+
+test("refuses requests addressed to another host name", async () => {
+  // A DNS-rebinding page reaches 127.0.0.1 but still sends its own domain as the Host
+  assert.equal(await rawStatus("/", { Host: "evil.example" }), 403);
+  assert.equal(await rawStatus("/", { Host: `localhost:${port}` }), 200);
+});
+
+test("refuses live-reload connections from other websites", async () => {
+  const handshake = "/socket.io/?EIO=4&transport=polling";
+  const fromSite = (origin) => rawStatus(handshake, { Origin: origin });
+  assert.equal(await fromSite("https://evil.example"), 403);
+  assert.equal(await fromSite("null"), 403);
+  assert.equal(await fromSite(`http://localhost:${port}`), 200);
 });
 
 test("loads every stylesheet and script from appa itself", async () => {
@@ -186,11 +211,11 @@ async function socketReplies(event, payload, waitMs = 1000) {
   return replies;
 }
 
-// rawStatus returns the status code for path, sent exactly as written. fetch would resolve the ".." segments
-// before sending, so these requests use node:http, which doesn't.
-function rawStatus(path) {
+// rawStatus returns the status code for path, sent exactly as written with the given headers. fetch would resolve
+// ".." segments before sending and won't set Host or Origin, so these requests use node:http, which does both.
+function rawStatus(path, headers = {}) {
   return new Promise((resolve, reject) => {
-    request({ host: "127.0.0.1", port, path }, (res) => {
+    request({ host: "127.0.0.1", port, path, headers }, (res) => {
       res.resume();
       resolve(res.statusCode);
     })

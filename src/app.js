@@ -23,6 +23,9 @@ import { full as markdownItEmoji } from "markdown-it-emoji";
 import { readdir, readFile, stat } from "node:fs/promises";
 
 const DEBUG = false;
+// socket.io answers every request under its path before appa's routes see it, so the path sits under /_appa/ with the
+// page assets, where it can't hide a docs folder named socket.io
+const SOCKET_PATH = "/_appa/socket.io";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
@@ -30,6 +33,7 @@ const app = express();
 const server = createServer(app);
 // Browsers let any website open a WebSocket to localhost, so live-reload connections need their own Origin check
 const io = new Server(server, {
+  path: SOCKET_PATH,
   allowRequest: (req, callback) => callback(null, isLocalRequest(req)),
 });
 
@@ -65,6 +69,7 @@ let baseDir = process.cwd();
 
 app.set("views", join(__dirname, "views"));
 app.set("view engine", "ejs");
+app.locals.socketPath = SOCKET_PATH; // where md.ejs points its live-reload client
 
 // Runs before every route, so nothing below answers a request from another site or a rebound domain
 app.use((req, res, next) => {
@@ -340,10 +345,10 @@ function withLiveReload(html, filepath) {
   // Escaping "<" keeps a file name containing "</script>" from ending the script early
   const path = JSON.stringify(filepath).replaceAll("<", "\\u003c");
   // The function wrapper keeps the client's names from colliding with the page's own scripts
-  const client = `<script src="/socket.io/socket.io.js"></script>
+  const client = `<script src="${SOCKET_PATH}/socket.io.js"></script>
 <script>
   (() => {
-    const socket = io();
+    const socket = io({ path: "${SOCKET_PATH}" });
     socket.emit("watch", ${path});
     socket.on("file_updated", () => location.reload());
     window.addEventListener("pageshow", (event) => {

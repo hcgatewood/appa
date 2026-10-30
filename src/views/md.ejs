@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/_appa/highlight.js/default.min.css" />
     <link rel="stylesheet" href="/_appa/katex/katex.min.css">
     <!-- socket.io's server serves the client that matches its own version -->
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="<%= socketPath %>/socket.io.js"></script>
 
     <style>
         .markdown-body {
@@ -34,7 +34,7 @@
       let filepath = "<%= filepath %>";
 
       document.addEventListener("DOMContentLoaded", function () {
-        let socket = io();
+        let socket = io({ path: "<%= socketPath %>" });
 
         socket.emit("watch", filepath);
 

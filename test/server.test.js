@@ -39,6 +39,11 @@ before(async () => {
   await writeFile(join(fixturesDir, "..dots.md"), "# Dots\n");
   await mkdir(join(fixturesDir, "sub"));
   await writeFile(join(fixturesDir, "sub", "inner.md"), "# Inner\n");
+  await mkdir(join(fixturesDir, "socket.io"));
+  await writeFile(
+    join(fixturesDir, "socket.io", "notes.md"),
+    "# Socket notes\n",
+  );
   await writeFile(
     join(fixturesDir, "page.html"),
     "<html><body><h1>Page</h1></body></html>\n",
@@ -82,6 +87,12 @@ test("serves a Markdown file at its path, with or without .md", async () => {
   }
 });
 
+test("serves a docs folder named socket.io, since live reload lives under /_appa/", async () => {
+  const res = await fetch(`${baseUrl}/socket.io/notes.md`);
+  assert.equal(res.status, 200);
+  assert.match(await res.text(), /<h1[^>]*>Socket notes<\/h1>/);
+});
+
 test("links each file from the index, with its name escaped for URLs", async () => {
   const html = await (await fetch(`${baseUrl}/`)).text();
   assert.ok(html.includes('href="notes.md"'));
@@ -100,7 +111,7 @@ test("adds live reload to an HTML page, before its </body>", async () => {
   assert.match(res.headers.get("content-type"), /html/);
 
   const html = await res.text();
-  const script = html.indexOf('<script src="/socket.io/socket.io.js">');
+  const script = html.indexOf('<script src="/_appa/socket.io/socket.io.js">');
   assert.ok(html.includes("<h1>Page</h1>"));
   assert.ok(
     script > html.indexOf("<h1>Page</h1>"),
@@ -121,7 +132,20 @@ test("adds live reload before </body> whatever its case or the text before it", 
 test("adds live reload to an HTML page with no </body>", async () => {
   const html = await (await fetch(`${baseUrl}/fragment.html`)).text();
   assert.ok(html.startsWith("<p>No body tag</p>"));
-  assert.ok(html.includes('<script src="/socket.io/socket.io.js">'));
+  assert.ok(html.includes('<script src="/_appa/socket.io/socket.io.js">'));
+});
+
+test("points each page's live-reload client at the socket appa listens on", async () => {
+  for (const page of ["/notes.md", "/page.html"]) {
+    const html = await (await fetch(baseUrl + page)).text();
+    const path = html.match(/io\(\{ path: "([^"]+)" \}\)/)?.[1];
+    assert.ok(path, `found no socket path in ${page}`);
+    assert.equal(
+      await rawStatus(`${path}/?EIO=4&transport=polling`),
+      200,
+      page,
+    );
+  }
 });
 
 test("reloads an HTML page when it, or the CSS or JS beside it, changes", async () => {
@@ -207,7 +231,7 @@ test("refuses requests addressed to another host name", async () => {
 });
 
 test("refuses live-reload connections from other websites", async () => {
-  const handshake = "/socket.io/?EIO=4&transport=polling";
+  const handshake = "/_appa/socket.io/?EIO=4&transport=polling";
   const fromSite = (origin) => rawStatus(handshake, { Origin: origin });
   assert.equal(await fromSite("https://evil.example"), 403);
   assert.equal(await fromSite("null"), 403);
@@ -282,7 +306,7 @@ async function waitForServer(url) {
 // for waitMs. It fails if the socket.io handshake doesn't complete, so an empty result means appa answered nothing,
 // not that the request never arrived.
 async function socketReplies(event, payload, { change, waitMs = 1000 } = {}) {
-  const url = `ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`;
+  const url = `ws://127.0.0.1:${port}/_appa/socket.io/?EIO=4&transport=websocket`;
   const ws = new WebSocket(url);
   const replies = [];
   let joined = false;

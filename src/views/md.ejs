@@ -7,8 +7,7 @@
     <link rel="stylesheet" href="/_appa/github-markdown-css/github-markdown-light.css" />
     <link rel="stylesheet" href="/_appa/highlight.js/default.min.css" />
     <link rel="stylesheet" href="/_appa/katex/katex.min.css">
-    <!-- socket.io's server serves the client that matches its own version -->
-    <script src="<%= socketPath %>/socket.io.js"></script>
+    <%- liveReloadClient %>
 
     <style>
         .markdown-body {
@@ -30,25 +29,6 @@
             text-align: center;
         }
     </style>
-    <script>
-      let filepath = "<%= filepath %>";
-
-      document.addEventListener("DOMContentLoaded", function () {
-        let socket = io({ path: "<%= socketPath %>" });
-
-        socket.emit("watch", filepath);
-
-        socket.on("file_updated", function (data) {
-          if (data.filepath === filepath) {
-            document.location.reload();
-          }
-        });
-      });
-
-      window.addEventListener("pageshow", function(event) {
-        if (event.persisted) document.location.reload();
-      });
-    </script>
     <script>
       // Mermaid is 5.5 MB, so only pages with a diagram load it
       document.addEventListener("DOMContentLoaded", function () {

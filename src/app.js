@@ -26,6 +26,10 @@ const DEBUG = false;
 // socket.io answers every request under its path before appa's routes see it, so the path sits under /_appa/ with the
 // page assets, where it can't hide a docs folder named socket.io
 const SOCKET_PATH = "/_appa/socket.io";
+// Every Markdown and HTML page loads these. socket.io's server serves the client that matches its own version.
+const LIVE_RELOAD_CLIENT = `<script src="${SOCKET_PATH}/socket.io.js"></script>
+<script src="/_appa/live_reload.js" data-socket-path="${SOCKET_PATH}"></script>
+`;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
@@ -69,7 +73,7 @@ let baseDir = process.cwd();
 
 app.set("views", join(__dirname, "views"));
 app.set("view engine", "ejs");
-app.locals.socketPath = SOCKET_PATH; // where md.ejs points its live-reload client
+app.locals.liveReloadClient = LIVE_RELOAD_CLIENT; // md.ejs writes these into each Markdown page's <head>
 
 // Runs before every route, so nothing below answers a request from another site or a rebound domain
 app.use((req, res, next) => {
@@ -119,12 +123,13 @@ app.get("/{*path}", async (req, res) => {
     res.status(403).send(err.message);
     return;
   }
-  const filepathMd = `${filepath}.md`;
 
-  const [stats, statsMd] = await getStats(filepath, filepathMd);
-  if (await sendFilepath(res, stats, filepath)) return;
-  if (await sendFilepath(res, statsMd, filepathMd)) return;
-  res.status(404).send("Not found");
+  const page = await findPage(filepath);
+  if (!page) {
+    res.status(404).send("Not found");
+    return;
+  }
+  await sendPage(res, page);
 });
 
 io.on("connection", (socket) => {
@@ -139,15 +144,26 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("watch", (file) => {
-    debug(`${socket.id} watching file ${file}`);
-    let filepath;
+  // A page sends its own URL path, e.g. "/Tom%20%26%20Jerry.md", and appa finds the file the way it did for the page
+  // request: Express decodes the path after its leading "/", and findPage falls back to the .md file.
+  socket.on("watch", async (urlPath) => {
+    debug(`${socket.id} watching ${urlPath}`);
+    let page;
     try {
-      filepath = getRelativeFilepath(file);
+      const requested = getRelativeFilepath(
+        decodeURIComponent(urlPath.replace(/^\//, "")),
+      );
+      page = await findPage(requested);
     } catch (err) {
-      console.log(`attempted directory traversal: ${file}`);
+      console.log(`can't watch ${urlPath}: ${err.message}`);
       return;
     }
+    // A directory's index doesn't live-reload, and watching it would watch the whole tree below it
+    if (!page || page.stats.isDirectory()) return;
+    // The socket may have closed while findPage ran, and a watcher started now would never close
+    if (socket.disconnected) return;
+
+    const { filepath } = page;
     watcher?.close();
     // An HTML page also reloads when the CSS or JS beside it changes, so it watches its directory but no deeper. A
     // Markdown page watches only its own file, with no depth option: on a single file, that option can make chokidar
@@ -157,9 +173,8 @@ io.on("connection", (socket) => {
       : chokidar.watch(filepath, { persistent: true });
     watcher.on("change", (path) => {
       if (!reloadsPage(filepath, path)) return;
-      const changedFile = relative(baseDir, path);
-      debug(`file updated: ${path} -> ${changedFile}`);
-      socket.emit("file_updated", { filepath: changedFile });
+      debug(`file updated: ${path}`);
+      socket.emit("file_updated");
     });
   });
 });
@@ -218,28 +233,20 @@ function isLoopbackOrigin(origin) {
   }
 }
 
-async function getStats(filepath, filepathMd) {
-  let stats;
-  let statsMd;
-  try {
-    stats = await stat(filepath);
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
+// findPage finds the file a URL names: the path itself, or else the .md file for a URL that leaves it off, e.g.
+// "notes" -> "notes.md". It returns the file's path and stats, or null if neither exists.
+async function findPage(filepath) {
+  for (const candidate of [filepath, `${filepath}.md`]) {
+    try {
+      return { filepath: candidate, stats: await stat(candidate) };
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
   }
-  try {
-    statsMd = await stat(filepathMd);
-  } catch (err) {
-    if (err.code !== "ENOENT") throw err;
-  }
-
-  return [stats, statsMd];
+  return null;
 }
 
-async function sendFilepath(res, stats, filepath) {
-  if (!stats) {
-    return false;
-  }
-
+async function sendPage(res, { filepath, stats }) {
   if (stats.isDirectory()) {
     const files = await getPages(filepath);
     const markdown = getFilesAsMd(files);
@@ -257,11 +264,10 @@ async function sendFilepath(res, stats, filepath) {
     });
   } else if (isHtml(filepath)) {
     const html = await readFile(filepath, "utf8");
-    res.type("html").send(withLiveReload(html, relative(baseDir, filepath)));
+    res.type("html").send(withLiveReload(html));
   } else {
     res.sendFile(filepath);
   }
-  return true;
 }
 
 export function renderMd(inputMd) {
@@ -341,26 +347,12 @@ function reloadsPage(pagePath, changedPath) {
 }
 
 // withLiveReload adds appa's live-reload client to an HTML page, before its </body>, or at the end if it has none.
-function withLiveReload(html, filepath) {
-  // Escaping "<" keeps a file name containing "</script>" from ending the script early
-  const path = JSON.stringify(filepath).replaceAll("<", "\\u003c");
-  // The function wrapper keeps the client's names from colliding with the page's own scripts
-  const client = `<script src="${SOCKET_PATH}/socket.io.js"></script>
-<script>
-  (() => {
-    const socket = io({ path: "${SOCKET_PATH}" });
-    socket.emit("watch", ${path});
-    socket.on("file_updated", () => location.reload());
-    window.addEventListener("pageshow", (event) => {
-      if (event.persisted) location.reload();
-    });
-  })();
-</script>
-`;
-  // Match </body> in the page itself: lowercasing a copy can change its length (e.g. "İ"), skewing the index
+function withLiveReload(html) {
+  // Search the page itself case-insensitively, rather than a lowercased copy: lowercasing can change a string's
+  // length (e.g. "İ" becomes "i" plus a combining dot), so a position found in the copy would be off in the page
   const bodyEnd = [...html.matchAll(/<\/body>/gi)].at(-1)?.index ?? -1;
-  if (bodyEnd === -1) return html + client;
-  return html.slice(0, bodyEnd) + client + html.slice(bodyEnd);
+  if (bodyEnd === -1) return html + LIVE_RELOAD_CLIENT;
+  return html.slice(0, bodyEnd) + LIVE_RELOAD_CLIENT + html.slice(bodyEnd);
 }
 
 function escapeFilePath(filepath) {

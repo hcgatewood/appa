@@ -36,6 +36,7 @@ before(async () => {
     "# Notes\n\n```mermaid\na --> b\n```\n",
   );
   await writeFile(join(fixturesDir, "my notes (draft).md"), "# Draft\n");
+  await writeFile(join(fixturesDir, "Tom & Jerry.md"), "# Tom\n");
   await writeFile(join(fixturesDir, "..dots.md"), "# Dots\n");
   await mkdir(join(fixturesDir, "sub"));
   await writeFile(join(fixturesDir, "sub", "inner.md"), "# Inner\n");
@@ -136,9 +137,13 @@ test("adds live reload to an HTML page with no </body>", async () => {
 });
 
 test("points each page's live-reload client at the socket appa listens on", async () => {
+  const client = await fetch(`${baseUrl}/_appa/live_reload.js`);
+  assert.equal(client.status, 200);
+  assert.match(client.headers.get("content-type"), /javascript/);
   for (const page of ["/notes.md", "/page.html"]) {
     const html = await (await fetch(baseUrl + page)).text();
-    const path = html.match(/io\(\{ path: "([^"]+)" \}\)/)?.[1];
+    assert.ok(html.includes('<script src="/_appa/live_reload.js"'), page);
+    const path = html.match(/data-socket-path="([^"]+)"/)?.[1];
     assert.ok(path, `found no socket path in ${page}`);
     assert.equal(
       await rawStatus(`${path}/?EIO=4&transport=polling`),
@@ -150,7 +155,7 @@ test("points each page's live-reload client at the socket appa listens on", asyn
 
 test("reloads an HTML page when it, or the CSS or JS beside it, changes", async () => {
   for (const file of ["page.html", "style.css", "app.js"]) {
-    const replies = await socketReplies("watch", "page.html", {
+    const replies = await socketReplies("watch", "/page.html", {
       change: () => appendFile(join(fixturesDir, file), "\n"),
     });
     assert.ok(
@@ -161,24 +166,75 @@ test("reloads an HTML page when it, or the CSS or JS beside it, changes", async 
 });
 
 test("doesn't reload an HTML page for other files beside it", async () => {
-  const replies = await socketReplies("watch", "page.html", {
+  const replies = await socketReplies("watch", "/page.html", {
     change: () => appendFile(join(fixturesDir, "notes.txt"), "\n"),
   });
   assert.deepEqual(replies, []);
 });
 
 test("reloads a Markdown page when its file changes", async () => {
-  const replies = await socketReplies("watch", "notes.md", {
+  const replies = await socketReplies("watch", "/notes.md", {
     change: () => appendFile(join(fixturesDir, "notes.md"), "\n"),
   });
   assert.ok(replies.some(([event]) => event === "file_updated"));
 });
 
 test("reloads a Markdown page only for its own file", async () => {
-  const replies = await socketReplies("watch", "notes.md", {
+  const replies = await socketReplies("watch", "/notes.md", {
     change: () => appendFile(join(fixturesDir, "style.css"), "\n"),
   });
   assert.deepEqual(replies, []);
+});
+
+test("finds the file to watch from a page's URL, the way the page request did", async () => {
+  // e.g. a name URLs escape, and a URL that leaves off .md
+  for (const [url, file] of [
+    ["/Tom%20%26%20Jerry.md", "Tom & Jerry.md"],
+    ["/notes", "notes.md"],
+  ]) {
+    const replies = await socketReplies("watch", url, {
+      change: () => appendFile(join(fixturesDir, file), "\n"),
+    });
+    assert.ok(
+      replies.some(([event]) => event === "file_updated"),
+      url,
+    );
+  }
+});
+
+test("doesn't watch files outside the served directory", async () => {
+  const neighbor = basename(neighborDir);
+  for (const url of [
+    `/../${neighbor}/secret.md`,
+    `/%2E%2E/${neighbor}/secret.md`,
+    `/..%2F${neighbor}%2Fsecret.md`,
+  ]) {
+    const replies = await socketReplies("watch", url, {
+      change: () => appendFile(join(neighborDir, "secret.md"), "\n"),
+    });
+    assert.deepEqual(replies, [], url);
+  }
+});
+
+test("survives watch messages that name no page", async () => {
+  // e.g. a malformed escape, a missing file, and a message that isn't a string
+  for (const payload of ["/%E0%A4%A", "/missing.md", 42]) {
+    await socketReplies("watch", payload, { waitMs: 200 });
+  }
+  assert.equal((await fetch(`${baseUrl}/notes.md`)).status, 200);
+});
+
+test("writes no file name into a page's scripts", async () => {
+  for (const [url, name] of [
+    ["/Tom%20%26%20Jerry.md", "Jerry"],
+    ["/page.html", "page.html"],
+  ]) {
+    const html = await (await fetch(baseUrl + url)).text();
+    const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)]
+      .map((match) => match[1])
+      .join("\n");
+    assert.ok(!scripts.includes(name), url);
+  }
 });
 
 test("serves the directory index with or without a trailing slash", async () => {

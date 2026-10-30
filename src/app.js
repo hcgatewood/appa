@@ -311,12 +311,24 @@ export function renderMd(inputMd) {
 }
 
 // getPages lists the Markdown and HTML files under dir, recursively, as paths relative to it.
+//
+// It skips a folder below dir that it can't read, e.g. one owned by another user, or one deleted while it was
+// listing, so one such folder doesn't hide every other page. Any other error, or one reading dir itself, throws.
 async function getPages(dir) {
   let stack = [dir];
   let files = [];
   while (stack.length > 0) {
     const currentDir = stack.pop();
-    const items = await readdir(currentDir, { withFileTypes: true });
+    let items;
+    try {
+      items = await readdir(currentDir, { withFileTypes: true });
+    } catch (err) {
+      const isSkippable =
+        currentDir !== dir && ["EACCES", "EPERM", "ENOENT"].includes(err.code);
+      if (!isSkippable) throw err;
+      console.log(`skipped a folder in the index: ${err.message}`);
+      continue;
+    }
     for (const item of items) {
       const fullPath = join(currentDir, item.name);
       if (item.isDirectory()) {

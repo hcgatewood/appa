@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import {
   appendFile,
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -104,6 +105,27 @@ test("lists HTML pages in the index alongside Markdown", async () => {
   const html = await (await fetch(`${baseUrl}/`)).text();
   assert.ok(html.includes('href="page.html"'));
   assert.ok(!html.includes('href="style.css"'));
+});
+
+test("lists the other pages when a folder below the index can't be read", async (t) => {
+  if (process.getuid?.() === 0) {
+    t.skip("root can read any folder");
+    return;
+  }
+  const locked = join(fixturesDir, "locked");
+  await mkdir(locked);
+  await writeFile(join(locked, "hidden.md"), "# Hidden\n");
+  await chmod(locked, 0o000);
+  try {
+    const res = await fetch(`${baseUrl}/`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.ok(html.includes('href="notes.md"'));
+    assert.ok(!html.includes("hidden.md"));
+  } finally {
+    await chmod(locked, 0o755);
+    await rm(locked, { recursive: true });
+  }
 });
 
 test("adds live reload to an HTML page, before its </body>", async () => {

@@ -136,12 +136,14 @@ io.on("connection", (socket) => {
   debug(`${socket.id} connected`);
 
   let watcher;
+  let reloadTimer;
 
   socket.on("disconnect", () => {
     debug(`${socket.id} disconnected`);
     if (watcher) {
       watcher.close();
     }
+    clearTimeout(reloadTimer);
   });
 
   // A page sends its own URL path, e.g. "/Tom%20%26%20Jerry.md", and appa finds the file the way it did for the page
@@ -158,23 +160,32 @@ io.on("connection", (socket) => {
       console.log(`can't watch ${urlPath}: ${err.message}`);
       return;
     }
-    // A directory's index doesn't live-reload, and watching it would watch the whole tree below it
-    if (!page || page.stats.isDirectory()) return;
+    if (!page) return;
     // The socket may have closed while findPage ran, and a watcher started now would never close
     if (socket.disconnected) return;
 
-    const { filepath } = page;
+    const { filepath, stats } = page;
     watcher?.close();
-    // An HTML page also reloads when the CSS or JS beside it changes, so it watches its directory but no deeper. A
-    // Markdown page watches only its own file, with no depth option: on a single file, that option can make chokidar
-    // miss changes.
-    watcher = isHtml(filepath)
-      ? chokidar.watch(dirname(filepath), { persistent: true, depth: 0 })
-      : chokidar.watch(filepath, { persistent: true });
-    watcher.on("change", (path) => {
-      if (!reloadsPage(filepath, path)) return;
-      debug(`file updated: ${path}`);
-      socket.emit("file_updated");
+    // Watch what can change the page, with ignoreInitial so chokidar doesn't report the files already there as added:
+    //   - A directory's index: the whole tree below it, since the index lists every page there
+    //   - An HTML page: its directory but no deeper, for the CSS and JS beside it
+    //   - A Markdown page: only its own file, with no depth option, which can make chokidar miss changes to one file
+    if (stats.isDirectory()) {
+      watcher = chokidar.watch(filepath, { ignoreInitial: true });
+    } else if (isHtml(filepath)) {
+      watcher = chokidar.watch(dirname(filepath), {
+        ignoreInitial: true,
+        depth: 0,
+      });
+    } else {
+      watcher = chokidar.watch(filepath, { ignoreInitial: true });
+    }
+    watcher.on("all", (event, path) => {
+      if (!reloadsPage(page, event, path)) return;
+      debug(`${event}: ${path}`);
+      // Reload once changes stop for 100 ms, so a burst (e.g. a git checkout adding 30 pages) sends one reload, not 30
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => socket.emit("file_updated"), 100);
     });
   });
 });
@@ -308,10 +319,9 @@ async function getPages(dir) {
     const items = await readdir(currentDir, { withFileTypes: true });
     for (const item of items) {
       const fullPath = join(currentDir, item.name);
-      const isPage = isMd(fullPath) || isHtml(fullPath);
       if (item.isDirectory()) {
         stack.push(fullPath);
-      } else if (item.isFile() && isPage) {
+      } else if (item.isFile() && isPage(fullPath)) {
         files.push(relative(dir, fullPath));
       }
     }
@@ -328,6 +338,11 @@ function getFilesAsMd(files) {
   return [header, ...body].join("\n");
 }
 
+// isPage reports whether a path is a page appa renders and lists, e.g. "notes.md" or "report.html".
+function isPage(filepath) {
+  return isMd(filepath) || isHtml(filepath);
+}
+
 // isMd reports whether a path is a Markdown page, e.g. "notes.md".
 function isMd(filepath) {
   return extname(filepath) === ".md";
@@ -338,12 +353,18 @@ function isHtml(filepath) {
   return [".html", ".htm"].includes(extname(filepath).toLowerCase());
 }
 
-// reloadsPage reports whether a change to changedPath should reload the page at pagePath: always for the page's own
-// file, and for an HTML page, also for the CSS and JS beside it.
-function reloadsPage(pagePath, changedPath) {
-  if (changedPath === pagePath) return true;
+// reloadsPage reports whether a chokidar event, e.g. "change" or "add", should reload a page:
+//   - A directory's index: a page added or removed anywhere below it, since the index lists page names
+//   - An HTML page: a change to its own file, or to the CSS or JS beside it
+//   - A Markdown page: a change to its own file
+function reloadsPage(page, event, changedPath) {
+  if (page.stats.isDirectory()) {
+    return ["add", "unlink"].includes(event) && isPage(changedPath);
+  }
+  if (event !== "change") return false;
+  if (changedPath === page.filepath) return true;
   const isAsset = [".css", ".js"].includes(extname(changedPath).toLowerCase());
-  return isHtml(pagePath) && isAsset;
+  return isHtml(page.filepath) && isAsset;
 }
 
 // withLiveReload adds appa's live-reload client to an HTML page, before its </body>, or at the end if it has none.

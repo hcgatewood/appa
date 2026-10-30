@@ -186,6 +186,38 @@ test("reloads a Markdown page only for its own file", async () => {
   assert.deepEqual(replies, []);
 });
 
+test("reloads a directory's index when a page anywhere below it is added or removed", async () => {
+  const added = join(fixturesDir, "sub", "added.md");
+  for (const change of [() => writeFile(added, "# Added\n"), () => rm(added)]) {
+    const replies = await socketReplies("watch", "/", { change });
+    assert.deepEqual(replies, [["file_updated"]]);
+  }
+});
+
+test("doesn't reload a directory's index for page edits or other files", async () => {
+  const other = join(fixturesDir, "sub", "other.txt");
+  const replies = await socketReplies("watch", "/sub", {
+    change: async () => {
+      await appendFile(join(fixturesDir, "sub", "inner.md"), "\n");
+      await writeFile(other, "not a page\n");
+    },
+  });
+  await rm(other);
+  assert.deepEqual(replies, []);
+});
+
+test("sends one reload for a burst of changes", async () => {
+  const pages = ["apple", "banana", "cherry", "donut", "egg"].map((name) =>
+    join(fixturesDir, "sub", `${name}.md`),
+  );
+  const replies = await socketReplies("watch", "/sub", {
+    change: () =>
+      Promise.all(pages.map((page) => writeFile(page, "# Burst\n"))),
+  });
+  await Promise.all(pages.map((page) => rm(page)));
+  assert.deepEqual(replies, [["file_updated"]]);
+});
+
 test("finds the file to watch from a page's URL, the way the page request did", async () => {
   // e.g. a name URLs escape, and a URL that leaves off .md
   for (const [url, file] of [

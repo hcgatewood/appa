@@ -240,6 +240,60 @@ test("sends one reload for a burst of changes", async () => {
   assert.deepEqual(replies, [["file_updated"]]);
 });
 
+test("reloads each of several open pages only for its own changes", async () => {
+  // Like open tabs: two on the same page, then another page, an HTML page, and the index
+  const urls = [
+    "/notes.md",
+    "/notes.md",
+    "/Tom%20%26%20Jerry.md",
+    "/page.html",
+    "/",
+  ];
+  const tabs = urls.map((url) => openSocket("watch", url));
+  const notes = join(fixturesDir, "notes.md");
+  const added = join(fixturesDir, "sub", "tabs.md");
+  // Each step's change, and how many reloads each tab should get from it
+  const steps = [
+    ["edit notes.md", () => appendFile(notes, "\n"), [1, 1, 0, 0, 0]],
+    [
+      "edit style.css",
+      () => appendFile(join(fixturesDir, "style.css"), "\n"),
+      [0, 0, 0, 1, 0],
+    ],
+    ["add a page", () => writeFile(added, "# Tabs\n"), [0, 0, 0, 0, 1]],
+    ["remove a page", () => rm(added), [0, 0, 0, 0, 1]],
+    [
+      "close one notes.md tab, then edit notes.md",
+      () => {
+        tabs[0].close();
+        return appendFile(notes, "\n");
+      },
+      [0, 1, 0, 0, 0],
+    ],
+  ];
+
+  try {
+    await sleep(500); // let the watchers start
+    assert.ok(
+      tabs.every((tab) => tab.joined),
+      "a socket.io handshake didn't complete",
+    );
+    for (const [label, change, want] of steps) {
+      for (const tab of tabs) tab.replies.length = 0;
+      await change();
+      await sleep(1000);
+      assert.deepEqual(
+        tabs.map((tab) => tab.replies.length),
+        want,
+        label,
+      );
+    }
+  } finally {
+    for (const tab of tabs) tab.close();
+    await rm(added, { force: true });
+  }
+});
+
 test("finds the file to watch from a page's URL, the way the page request did", async () => {
   // e.g. a name URLs escape, and a URL that leaves off .md
   for (const [url, file] of [
@@ -411,36 +465,47 @@ async function waitForServer(url) {
 
 // socketReplies emits one event over appa's live-reload socket and returns the events appa sends back.
 //
-// It speaks socket.io's wire protocol over a plain WebSocket, the way any client on the network could, rather than
-// through appa's page. With change, it gives appa's file watcher time to start, runs change, then collects replies
-// for waitMs. It fails if the socket.io handshake doesn't complete, so an empty result means appa answered nothing,
-// not that the request never arrived.
+// With change, it gives appa's file watcher time to start, runs change, then collects replies for waitMs. It fails if
+// the socket.io handshake doesn't complete, so an empty result means appa answered nothing, not that the request
+// never arrived.
 async function socketReplies(event, payload, { change, waitMs = 1000 } = {}) {
-  const url = `ws://127.0.0.1:${port}/_appa/socket.io/?EIO=4&transport=websocket`;
-  const ws = new WebSocket(url);
-  const replies = [];
-  let joined = false;
-
-  ws.onmessage = ({ data }) => {
-    if (data.startsWith("0")) {
-      ws.send("40"); // the server opened the connection; join the default namespace
-    } else if (data.startsWith("40")) {
-      joined = true;
-      ws.send(`42${JSON.stringify([event, payload])}`); // 42 = an event message
-    } else if (data.startsWith("42")) {
-      replies.push(JSON.parse(data.slice(2)));
-    }
-  };
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const socket = openSocket(event, payload);
   if (change) {
     await sleep(500);
     await change();
   }
   await sleep(waitMs);
-  ws.close();
+  socket.close();
 
-  assert.ok(joined, "the socket.io handshake didn't complete");
-  return replies;
+  assert.ok(socket.joined, "the socket.io handshake didn't complete");
+  return socket.replies;
+}
+
+// openSocket connects to appa's live-reload socket, emits one event, and collects the events appa sends back in
+// replies until close. Each call is its own connection, as each open page is.
+//
+// It speaks socket.io's wire protocol over a plain WebSocket, the way any client on the network could, rather than
+// through appa's page.
+function openSocket(event, payload) {
+  const url = `ws://127.0.0.1:${port}/_appa/socket.io/?EIO=4&transport=websocket`;
+  const ws = new WebSocket(url);
+  const socket = { replies: [], joined: false, close: () => ws.close() };
+
+  ws.onmessage = ({ data }) => {
+    if (data.startsWith("0")) {
+      ws.send("40"); // the server opened the connection; join the default namespace
+    } else if (data.startsWith("40")) {
+      socket.joined = true;
+      ws.send(`42${JSON.stringify([event, payload])}`); // 42 = an event message
+    } else if (data.startsWith("42")) {
+      socket.replies.push(JSON.parse(data.slice(2)));
+    }
+  };
+  return socket;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // rawStatus returns the status code for path, sent exactly as written with the given headers. fetch would resolve

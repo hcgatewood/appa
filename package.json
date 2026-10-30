@@ -11,6 +11,9 @@
     "bin",
     "src"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "node --test",
     "start": "node bin/appa.js start",
